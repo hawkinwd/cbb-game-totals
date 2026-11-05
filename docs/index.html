@@ -15,9 +15,11 @@
   header { display:flex; flex-wrap:wrap; align-items:baseline; gap:8px 16px; margin-bottom:12px; }
   h1 { font-size:20px; margin:0; }
   .updated { color:var(--muted); font-size:13px; }
-  nav { display:flex; gap:8px; margin:8px 0 14px; }
-  nav button { border:1px solid var(--line); background:var(--card); color:var(--fg); padding:6px 12px; border-radius:8px; cursor:pointer; font:inherit; }
-  nav button[aria-pressed="true"] { border-color:var(--fg); font-weight:600; }
+  nav { display:flex; gap:8px; margin:8px 0 14px; align-items:stretch; }
+  nav button, nav select { border:1px solid var(--line); background:var(--card); color:var(--fg); padding:6px 12px; border-radius:8px; font:inherit; }
+  nav button { cursor:pointer; }
+  nav button:disabled { opacity:.35; cursor:default; }
+  nav select { flex:1; max-width:340px; cursor:pointer; }
   details { border:1px solid var(--line); border-radius:10px; margin-bottom:8px; background:var(--card); }
   summary { cursor:pointer; list-style:none; display:grid; grid-template-columns: 1fr auto auto auto; gap:6px 14px; align-items:center; padding:10px 12px; }
   summary::-webkit-details-marker { display:none; }
@@ -47,7 +49,11 @@
     <h1>CBB Totals</h1>
     <span class="updated" id="updated"></span>
   </header>
-  <nav id="tabs"></nav>
+  <nav id="picker" hidden>
+    <button type="button" id="older" aria-label="Previous day">&#9664;</button>
+    <select id="date" aria-label="Pick a day"></select>
+    <button type="button" id="newer" aria-label="Next day">&#9654;</button>
+  </nav>
   <div id="list"></div>
 </main>
 
@@ -78,9 +84,25 @@
     if (g.state === "post") return "Final";
     return tipTime(g.tip);
   }
+  function dayLabel(date) {
+    return new Date(date + "T12:00:00").toLocaleDateString([], { weekday: "short", month: "numeric", day: "numeric" });
+  }
 
-  function teamTable(t, line) {
+  // Over/under record vs each game's own saved line: ou = [over, under, games with a line, games counted]
+  function ouRow(ou) {
+    var label = "O/U last 5", value;
+    if (!ou || !ou[3]) { value = "–"; }
+    else if (ou[2] === 0) { value = "n/a"; label += " (no saved lines)"; }
+    else {
+      value = ou[0] + "–" + ou[1];
+      if (ou[2] < ou[3]) label += " (" + ou[2] + " of " + ou[3] + " lines)";
+    }
+    return h("tr", { class: "stat" }, [h("td", null, [label]), h("td"), h("td", null, [value])]);
+  }
+
+  function teamTable(t) {
     var rows = [h("tr", null, [h("th", null, [t.name]), h("th", null, ["Prev 5"]), h("th", null, ["total"])])];
+    rows.push(ouRow(t.ou));
     t.prev.forEach(function (p) {
       rows.push(h("tr", null, [
         h("td", null, [p.d + " ", h("span", { class: "opp" }, ["vs " + p.opp])]),
@@ -98,11 +120,12 @@
   }
 
   function summaryTable(g) {
-    var rows = [
-      ["2 team L3", f(g.k3)], ["2 team L5", f(g.k4)], ["Pick", g.pick],
-      ["diff", signed(g.diff)], ["A.S.D", f(g.asd)], ["L10 vs line (o%)", f(g.l10)],
-      ["Games over", g.g_over], ["Games under", g.g_under]
-    ];
+    var rows = [];
+    if (g.pick) {
+      rows.push(["2 team L3", f(g.k3)], ["2 team L5", f(g.k4)], ["Pick", g.pick],
+                ["diff", signed(g.diff)], ["A.S.D", f(g.asd)], ["L10 vs line (o%)", f(g.l10)]);
+    }
+    rows.push(["Games over", g.g_known ? g.g_over : "–"], ["Games under", g.g_known ? g.g_under : "–"]);
     return h("table", { class: "summary" }, rows.map(function (r) {
       return h("tr", { class: "stat" }, [h("td", null, [r[0]]), h("td", null, [r[1]])]);
     }));
@@ -118,52 +141,82 @@
       pick
     ]);
     var body = h("div", { class: "body" }, [
-      h("div", { class: "sub" }, [g.line === null ? "No line yet" : "Game line " + g.line + (g.book ? " (" + g.book + ")" : "")]),
-      h("div", { class: "cols" }, [teamTable(g.away, g.line), teamTable(g.home, g.line)])
+      h("div", { class: "sub" }, [g.line === null ? "No line saved" : "Game line " + g.line + (g.book ? " (" + g.book + ")" : "")]),
+      h("div", { class: "cols" }, [teamTable(g.away), teamTable(g.home)]),
+      summaryTable(g)
     ]);
-    if (g.pick) body.appendChild(summaryTable(g));
     if (g.reason) {
       var why = g.reason === "need 5 games for each team"
         ? "Need 5 games for each team (" + g.away.name + " " + g.away.available + ", " + g.home.name + " " + g.home.available + ")."
         : g.reason.charAt(0).toUpperCase() + g.reason.slice(1) + ".";
       body.appendChild(h("p", { class: "note" }, [why]));
     }
-    if (g.pick && g.ou_known < 10) {
-      body.appendChild(h("p", { class: "note" }, ["Games over/under counted from " + g.ou_known + " of 10 games with a saved line."]));
+    if (g.g_known > 0 && g.g_known < g.g_n) {
+      body.appendChild(h("p", { class: "note" }, ["Games over/under counted from " + g.g_known + " of " + g.g_n + " games with a saved line."]));
     }
     return h("details", null, [sum, body]);
   }
 
-  function render(data, dayIdx) {
-    var list = document.getElementById("list");
+  var list = document.getElementById("list");
+  var select = document.getElementById("date");
+  var olderBtn = document.getElementById("older");
+  var newerBtn = document.getElementById("newer");
+  var dates = [];          // newest first
+  var cache = {};
+
+  function loadDay(date) {
+    if (cache[date]) return Promise.resolve(cache[date]);
+    return fetch("data/days/" + date + ".json", { cache: "no-store" })
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(function (d) { cache[date] = d; return d; });
+  }
+
+  function show(date) {
+    select.value = date;
+    var i = dates.indexOf(date);
+    olderBtn.disabled = i >= dates.length - 1;
+    newerBtn.disabled = i <= 0;
     list.textContent = "";
-    var day = data.days[dayIdx];
-    if (!day.games.length) { list.appendChild(h("div", { class: "empty" }, ["No games on this date."])); return; }
-    day.games.forEach(function (g) { list.appendChild(gameEl(g)); });
-  }
-
-  function init(data) {
-    document.getElementById("updated").textContent =
-      "Updated " + new Date(data.generated_at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-    var tabs = document.getElementById("tabs");
-    data.days.forEach(function (d, i) {
-      var label = new Date(d.date + "T12:00:00").toLocaleDateString([], { weekday: "short", month: "numeric", day: "numeric" });
-      var b = h("button", { type: "button", "aria-pressed": i === 0 ? "true" : "false" }, [label + " (" + d.games.length + ")"]);
-      b.addEventListener("click", function () {
-        Array.prototype.forEach.call(tabs.children, function (x) { x.setAttribute("aria-pressed", "false"); });
-        b.setAttribute("aria-pressed", "true");
-        render(data, i);
-      });
-      tabs.appendChild(b);
+    list.appendChild(h("div", { class: "empty" }, ["Loading…"]));
+    loadDay(date).then(function (day) {
+      if (select.value !== date) return;   // user already moved on
+      list.textContent = "";
+      if (!day.games.length) { list.appendChild(h("div", { class: "empty" }, ["No games on this date."])); return; }
+      day.games.forEach(function (g) { list.appendChild(gameEl(g)); });
+    }).catch(function () {
+      list.textContent = "";
+      list.appendChild(h("div", { class: "empty" }, ["Couldn't load that day."]));
     });
-    render(data, 0);
   }
 
-  fetch("data/slate.json", { cache: "no-store" })
+  function init(index) {
+    document.getElementById("updated").textContent =
+      "Updated " + new Date(index.generated_at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+    if (!index.dates.length) {
+      list.appendChild(h("div", { class: "empty" }, ["No games saved yet."]));
+      return;
+    }
+    dates = index.dates.map(function (d) { return d.date; }).reverse();
+    index.dates.slice().reverse().forEach(function (d) {
+      var tag = d.date === index.today ? " (today)" : "";
+      select.appendChild(h("option", { value: d.date }, [dayLabel(d.date) + tag + " · " + d.n + (d.n === 1 ? " game" : " games")]));
+    });
+    document.getElementById("picker").hidden = false;
+    select.addEventListener("change", function () { show(select.value); });
+    olderBtn.addEventListener("click", function () { var i = dates.indexOf(select.value); if (i < dates.length - 1) show(dates[i + 1]); });
+    newerBtn.addEventListener("click", function () { var i = dates.indexOf(select.value); if (i > 0) show(dates[i - 1]); });
+
+    // Open on today; if today has no games, the latest day up to today; otherwise the newest day.
+    var start = dates.indexOf(index.today) >= 0 ? index.today
+      : (dates.filter(function (d) { return d <= index.today; })[0] || dates[0]);
+    show(start);
+  }
+
+  fetch("data/index.json", { cache: "no-store" })
     .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
     .then(init)
     .catch(function () {
-      document.getElementById("list").appendChild(h("div", { class: "empty" }, ["Couldn't load data/slate.json yet."]));
+      list.appendChild(h("div", { class: "empty" }, ["Couldn't load data yet."]));
     });
 })();
 </script>

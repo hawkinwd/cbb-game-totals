@@ -106,7 +106,51 @@ class Rules(unittest.TestCase):
             games[k]["line"] = 145.0  # total 150 > 145 -> over
         games["a2"]["line"] = 155.0  # under
         res = model.compute_game(games["target"], model.build_index(games))
-        self.assertEqual((res["g_over"], res["g_under"], res["ou_known"]), (3, 1, 4))
+        self.assertEqual((res["g_over"], res["g_under"], res["g_known"], res["g_n"]), (3, 1, 4, 10))
+        self.assertEqual(res["away"]["ou"], [2, 1, 3, 5])  # per-team record: 2 over, 1 under, 3 of 5 have lines
+        self.assertEqual(res["home"]["ou"], [1, 0, 1, 5])
+
+    def test_team_ou_record_shown_even_before_five_games(self):
+        games = games_from_totals([150, 150, 150], [150] * 5, 140.0)
+        games["a0"]["line"], games["a1"]["line"] = 145.0, 155.0
+        res = model.compute_game(games["target"], model.build_index(games))
+        self.assertIsNone(res["pick"])
+        self.assertEqual(res["away"]["ou"], [1, 1, 2, 3])  # 3 games counted, 2 have lines
+        self.assertEqual((res["g_over"], res["g_under"], res["g_known"], res["g_n"]), (1, 1, 2, 8))
+
+    def test_push_counts_as_neither(self):
+        games = games_from_totals([150] * 5, [150] * 5, 140.0)
+        games["a0"]["line"] = 150.0
+        res = model.compute_game(games["target"], model.build_index(games))
+        self.assertEqual(res["away"]["ou"], [0, 0, 1, 5])
+
+
+class Archive(unittest.TestCase):
+    def test_every_day_with_games_is_built_point_in_time(self):
+        from datetime import date
+        games = games_from_totals([140, 150, 160, 145, 155], [140] * 5, 145.0)
+        index, days = model.build_site(games, today=date(2026, 11, 20))
+        dates = [d["date"] for d in index["dates"]]
+        self.assertEqual(dates, sorted(dates))
+        self.assertEqual(dates[0], "2026-11-01")
+        self.assertEqual(dates[-1], "2026-11-20")
+        self.assertEqual(index["today"], "2026-11-20")
+        self.assertEqual(set(dates), set(days))
+        # the Nov 3 game for team A only had 2 earlier games at the time
+        nov3 = {g["id"]: g for g in days["2026-11-03"]["games"]}["a2"]
+        self.assertEqual(nov3["away"]["available"], 2)
+        self.assertIsNone(nov3["pick"])
+        # the game on the 20th sees all five
+        self.assertEqual(days["2026-11-20"]["games"][0]["away"]["available"], 5)
+        self.assertIsNotNone(days["2026-11-20"]["games"][0]["pick"])
+
+    def test_future_beyond_tomorrow_is_left_out(self):
+        from datetime import date
+        games = games_from_totals([140] * 5, [140] * 5, 145.0)
+        index, days = model.build_site(games, today=date(2026, 11, 18))
+        self.assertNotIn("2026-11-20", days)  # two days ahead
+        index, days = model.build_site(games, today=date(2026, 11, 19))
+        self.assertIn("2026-11-20", days)  # tomorrow
 
 
 class LineFreezing(unittest.TestCase):

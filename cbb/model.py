@@ -74,6 +74,20 @@ def team_block(idx, team, game, line):
         for r in use
     ]
     out["ok"] = len(use) == config.GAMES_PER_TEAM
+
+    # Over/under record vs each game's own saved line (the sheet's C2/D2/G2/H2, typed by hand there).
+    # [overs, unders, games_with_a_saved_line, games_counted]; pushes count as neither.
+    over = under = known = 0
+    for r in use:
+        if r["gline"] is None:
+            continue
+        known += 1
+        if r["total"] > r["gline"]:
+            over += 1
+        elif r["total"] < r["gline"]:
+            under += 1
+    out["ou"] = [over, under, known, len(use)]
+
     if not out["ok"]:
         return out, None
     totals = [r["total"] for r in use]
@@ -84,17 +98,6 @@ def team_block(idx, team, game, line):
         l3a=l3 / 3, l5a=s / 5,
         sd=statistics.stdev(totals),
     )
-    # Over/under record vs each game's own line (sheet's hand-typed C2/D2/G2/H2).
-    over = under = known = 0
-    for r in use:
-        if r["gline"] is None:
-            continue
-        known += 1
-        if r["total"] > r["gline"]:
-            over += 1
-        elif r["total"] < r["gline"]:
-            under += 1
-    out["ou"] = [over, under, known]
     return out, totals
 
 
@@ -107,6 +110,11 @@ def compute_game(game, idx):
         "line": line, "book": game.get("line_book"),
         "away": a, "home": h,
         "pick": None, "reason": None,
+        # Both teams' previous-5 O/U records added together (sheet K11/K12), out of up to 10 games.
+        "g_over": a["ou"][0] + h["ou"][0],
+        "g_under": a["ou"][1] + h["ou"][1],
+        "g_known": a["ou"][2] + h["ou"][2],
+        "g_n": a["ou"][3] + h["ou"][3],
     }
     if not (a["ok"] and h["ok"]):
         res["reason"] = "need 5 games for each team"
@@ -124,9 +132,6 @@ def compute_game(game, idx):
     res["asd"] = (a["sd"] + h["sd"]) / 2
     overs = sum(1 for t in a_tot + h_tot if t > line)
     res["l10"] = overs / 10
-    res["g_over"] = a["ou"][0] + h["ou"][0]
-    res["g_under"] = a["ou"][1] + h["ou"][1]
-    res["ou_known"] = a["ou"][2] + h["ou"][2]
     return res
 
 
@@ -140,22 +145,37 @@ def _round(o):
     return o
 
 
-def build_slate(games, today=None):
-    """Slim JSON for the site: today (US Eastern) plus SLATE_DAYS_AHEAD days."""
+def build_site(games, today=None):
+    """Everything the site needs, rebuilt from the game log.
+
+    Returns (index, days):
+      index = {"generated_at", "today", "dates": [{"date", "n"}, ...]}   oldest -> newest
+      days  = {"2026-11-05": {"date", "games": [...]}, ...}              one entry per day with games
+
+    Every past day is recomputed from the log as it stood going into that day (each game only
+    sees games that finished before its tip-off, and the line saved for it), so the archive is
+    just a rebuild: nothing extra to store, and it stays correct if the log is ever corrected.
+    """
     idx = build_index(games)
     today = today or datetime.now(ET).date()
-    days = []
-    for offset in range(config.SLATE_DAYS_AHEAD + 1):
-        day = today + timedelta(days=offset)
-        todays = [
-            g for g in games.values()
-            if et_date(g["date"]) == day
-            and g["status"] not in config.HIDDEN_STATUSES
-            and g["season_type"] not in config.EXCLUDE_SEASON_TYPES
-        ]
+    last = today + timedelta(days=config.SLATE_DAYS_AHEAD)
+    by_day = {}
+    for g in games.values():
+        if g["status"] in config.HIDDEN_STATUSES or g["season_type"] in config.EXCLUDE_SEASON_TYPES:
+            continue
+        d = et_date(g["date"])
+        if d <= last:
+            by_day.setdefault(d, []).append(g)
+    days = {}
+    for d, todays in by_day.items():
         todays.sort(key=lambda g: (g["date"], g["id"]))
-        days.append({"date": day.isoformat(), "games": [compute_game(g, idx) for g in todays]})
-    return _round({
+        days[d.isoformat()] = _round({
+            "date": d.isoformat(),
+            "games": [compute_game(g, idx) for g in todays],
+        })
+    index = {
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%MZ"),
-        "days": days,
-    })
+        "today": today.isoformat(),
+        "dates": [{"date": k, "n": len(days[k]["games"])} for k in sorted(days)],
+    }
+    return index, days

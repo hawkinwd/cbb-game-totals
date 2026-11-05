@@ -1,17 +1,29 @@
 #!/usr/bin/env python3
 """
-Pull from ESPN, update the game log, rebuild the site's data file.
+Pull from ESPN, update the game log, rebuild the site's data files.
 
   python update.py                    # normal run: last 2 days + today + tomorrow
-  python update.py --from 20261101    # backfill from the season's first day
-  python update.py --build-only       # no network; just rebuild docs/data/slate.json
+  python update.py --from 20261101    # backfill from a specific day
+  python update.py --build-only       # no network; just rebuild docs/data/
 """
 import argparse
 import json
+import shutil
 import sys
 from datetime import datetime, timedelta, timezone
 
 from cbb import config, espn, model, store
+
+
+def write_site(index, days):
+    out = config.SITE_DATA_DIR
+    days_dir = out / "days"
+    if days_dir.exists():
+        shutil.rmtree(days_dir)  # rebuilt from scratch every run, so nothing stale lingers
+    days_dir.mkdir(parents=True, exist_ok=True)
+    for date, payload in days.items():
+        (days_dir / f"{date}.json").write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+    (out / "index.json").write_text(json.dumps(index, separators=(",", ":")), encoding="utf-8")
 
 
 def main():
@@ -29,6 +41,8 @@ def main():
         today = datetime.now(model.ET).date()
         if args.start:
             start = datetime.strptime(args.start, "%Y%m%d").date()
+        elif not games:  # very first run: pull the season so far
+            start = datetime.strptime(config.SEASON_START, "%Y%m%d").date()
         else:
             start = today - timedelta(days=args.days_back)
         end = today + timedelta(days=args.days_ahead)
@@ -52,11 +66,10 @@ def main():
             sys.exit("Every fetch failed; leaving data untouched.")
         store.save(games)
 
-    slate = model.build_slate(games)
-    config.SLATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    config.SLATE_FILE.write_text(json.dumps(slate, separators=(",", ":")), encoding="utf-8")
-    n = sum(len(day["games"]) for day in slate["days"])
-    print(f"slate: {n} games over {len(slate['days'])} days -> {config.SLATE_FILE}")
+    index, days = model.build_site(games)
+    write_site(index, days)
+    n = sum(len(v["games"]) for v in days.values())
+    print(f"site: {len(days)} days, {n} games -> {config.SITE_DATA_DIR}")
 
 
 if __name__ == "__main__":
