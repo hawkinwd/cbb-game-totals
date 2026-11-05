@@ -144,13 +144,18 @@ class Archive(unittest.TestCase):
         self.assertEqual(days["2026-11-20"]["games"][0]["away"]["available"], 5)
         self.assertIsNotNone(days["2026-11-20"]["games"][0]["pick"])
 
-    def test_future_beyond_tomorrow_is_left_out(self):
-        from datetime import date
-        games = games_from_totals([140] * 5, [140] * 5, 145.0)
-        index, days = model.build_site(games, today=date(2026, 11, 18))
-        self.assertNotIn("2026-11-20", days)  # two days ahead
-        index, days = model.build_site(games, today=date(2026, 11, 19))
-        self.assertIn("2026-11-20", days)  # tomorrow
+    def test_days_beyond_the_ahead_limit_are_left_out(self):
+        from datetime import date, timedelta
+        from cbb import config
+        games = games_from_totals([140] * 5, [140] * 5, 145.0)  # the game being predicted is on 2026-11-20
+        target = date(2026, 11, 20)
+        ahead = config.SLATE_DAYS_AHEAD
+        # target is exactly `ahead` days away -> shown
+        _, days = model.build_site(games, today=target - timedelta(days=ahead))
+        self.assertIn("2026-11-20", days)
+        # one day further out -> not shown
+        _, days = model.build_site(games, today=target - timedelta(days=ahead + 1))
+        self.assertNotIn("2026-11-20", days)
 
 
 class LineFreezing(unittest.TestCase):
