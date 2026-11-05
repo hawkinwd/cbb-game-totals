@@ -1,0 +1,65 @@
+name: Update site
+
+on:
+  schedule:
+    - cron: "52 * * * *"
+  workflow_dispatch:
+    inputs:
+      backfill_from:
+        description: "Optional: pull everything from this date (YYYYMMDD), e.g. 20261101"
+        required: false
+        default: ""
+
+permissions:
+  contents: write     # commit data/games.jsonl
+  pages: write        # deploy the site
+  id-token: write
+
+concurrency:
+  group: update-site
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run tests
+        run: python -m unittest discover -s tests
+
+      - name: Fetch from ESPN and rebuild data
+        env:
+          BACKFILL_FROM: ${{ github.event.inputs.backfill_from }}
+        run: |
+          if [ -n "$BACKFILL_FROM" ]; then
+            python update.py --from "$BACKFILL_FROM"
+          else
+            python update.py
+          fi
+
+      - name: Commit game log
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Update game log $(date -u +%Y-%m-%dT%H:%MZ)"
+            git push
+          fi
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
