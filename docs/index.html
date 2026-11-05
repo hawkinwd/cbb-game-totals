@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CBB Totals</title>
+<style>
+  :root { color-scheme: light dark; --bg:#fff; --fg:#1b1d21; --muted:#6b7280; --line:#e3e5e8; --card:#f7f8fa;
+          --over:#d97706; --o:#15803d; --u:#b91c1c; --np:#6b7280; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#14161a; --fg:#e8eaed; --muted:#9aa0a6; --line:#2c3037; --card:#1b1e23;
+          --over:#fbbf24; --o:#4ade80; --u:#f87171; --np:#9aa0a6; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  main { max-width:980px; margin:0 auto; padding:16px; }
+  header { display:flex; flex-wrap:wrap; align-items:baseline; gap:8px 16px; margin-bottom:12px; }
+  h1 { font-size:20px; margin:0; }
+  .updated { color:var(--muted); font-size:13px; }
+  nav { display:flex; gap:8px; margin:8px 0 14px; }
+  nav button { border:1px solid var(--line); background:var(--card); color:var(--fg); padding:6px 12px; border-radius:8px; cursor:pointer; font:inherit; }
+  nav button[aria-pressed="true"] { border-color:var(--fg); font-weight:600; }
+  details { border:1px solid var(--line); border-radius:10px; margin-bottom:8px; background:var(--card); }
+  summary { cursor:pointer; list-style:none; display:grid; grid-template-columns: 1fr auto auto auto; gap:6px 14px; align-items:center; padding:10px 12px; }
+  summary::-webkit-details-marker { display:none; }
+  .teams { font-weight:600; }
+  .sub { color:var(--muted); font-size:12px; font-weight:400; }
+  .num { font-variant-numeric: tabular-nums; text-align:right; min-width:52px; }
+  .pick { font-weight:700; min-width:34px; text-align:center; border-radius:6px; padding:2px 8px; border:1px solid currentColor; }
+  .pick.o { color:var(--o); } .pick.u { color:var(--u); } .pick.NP { color:var(--np); } .pick.none { color:var(--muted); border-style:dashed; font-weight:400; font-size:12px; }
+  .body { padding:4px 12px 12px; border-top:1px solid var(--line); }
+  .cols { display:grid; grid-template-columns: 1fr 1fr; gap:14px; margin-top:10px; }
+  @media (max-width:640px) { .cols { grid-template-columns:1fr; } summary { grid-template-columns: 1fr auto auto; } .hide-sm { display:none; } }
+  table { border-collapse:collapse; width:100%; font-variant-numeric: tabular-nums; }
+  th, td { padding:3px 6px; text-align:right; border-bottom:1px solid var(--line); font-size:14px; }
+  th:first-child, td:first-child { text-align:left; }
+  th { font-weight:600; }
+  td.over { color:var(--over); font-weight:700; }
+  .opp { color:var(--muted); font-size:12px; }
+  .stat td:first-child { color:var(--muted); }
+  .summary { margin-top:12px; max-width:420px; }
+  .note { color:var(--muted); margin:10px 0 0; }
+  .empty { color:var(--muted); padding:24px 0; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>CBB Totals</h1>
+    <span class="updated" id="updated"></span>
+  </header>
+  <nav id="tabs"></nav>
+  <div id="list"></div>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  // Tiny DOM helper; everything goes in as text, never as HTML.
+  function h(tag, attrs, kids) {
+    var el = document.createElement(tag);
+    if (attrs) for (var k in attrs) {
+      if (k === "class") el.className = attrs[k];
+      else if (attrs[k] !== null && attrs[k] !== undefined) el.setAttribute(k, attrs[k]);
+    }
+    (kids || []).forEach(function (c) {
+      if (c === null || c === undefined) return;
+      el.appendChild(typeof c === "string" || typeof c === "number" ? document.createTextNode(String(c)) : c);
+    });
+    return el;
+  }
+  function f(n, d) { return (n === null || n === undefined) ? "–" : Number(n).toFixed(d === undefined ? 2 : d); }
+  function signed(n) { return (n === null || n === undefined) ? "–" : (n > 0 ? "+" : "") + Number(n).toFixed(2); }
+  function tipTime(iso) {
+    return new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  }
+  function statusText(g) {
+    if (g.state === "in") return "Live";
+    if (g.state === "post") return "Final";
+    return tipTime(g.tip);
+  }
+
+  function teamTable(t, line) {
+    var rows = [h("tr", null, [h("th", null, [t.name]), h("th", null, ["Prev 5"]), h("th", null, ["total"])])];
+    t.prev.forEach(function (p) {
+      rows.push(h("tr", null, [
+        h("td", null, [p.d + " ", h("span", { class: "opp" }, ["vs " + p.opp])]),
+        h("td", null, [p.own + "–" + p.oppp]),
+        h("td", { class: p.over ? "over" : "" }, [p.total])
+      ]));
+    });
+    if (t.ok) {
+      [["min", t.min], ["max", t.max], ["L3", t.l3], ["L5", t.l5], ["L3 avg", f(t.l3a)], ["L5 avg", f(t.l5a)], ["Standard Dev.", f(t.sd)]]
+        .forEach(function (r) {
+          rows.push(h("tr", { class: "stat" }, [h("td", null, [r[0]]), h("td"), h("td", null, [r[1]])]));
+        });
+    }
+    return h("table", null, rows);
+  }
+
+  function summaryTable(g) {
+    var rows = [
+      ["2 team L3", f(g.k3)], ["2 team L5", f(g.k4)], ["Pick", g.pick],
+      ["diff", signed(g.diff)], ["A.S.D", f(g.asd)], ["L10 vs line (o%)", f(g.l10)],
+      ["Games over", g.g_over], ["Games under", g.g_under]
+    ];
+    return h("table", { class: "summary" }, rows.map(function (r) {
+      return h("tr", { class: "stat" }, [h("td", null, [r[0]]), h("td", null, [r[1]])]);
+    }));
+  }
+
+  function gameEl(g) {
+    var title = g.away.name + " vs " + g.home.name;
+    var pick = g.pick ? h("span", { class: "pick " + g.pick }, [g.pick]) : h("span", { class: "pick none" }, ["–"]);
+    var sum = h("summary", null, [
+      h("div", null, [h("div", { class: "teams" }, [title]), h("div", { class: "sub" }, [statusText(g)])]),
+      h("div", { class: "num hide-sm" }, [g.line === null ? "no line" : "Line " + g.line]),
+      h("div", { class: "num hide-sm" }, [g.diff === undefined ? "" : "diff " + signed(g.diff)]),
+      pick
+    ]);
+    var body = h("div", { class: "body" }, [
+      h("div", { class: "sub" }, [g.line === null ? "No line yet" : "Game line " + g.line + (g.book ? " (" + g.book + ")" : "")]),
+      h("div", { class: "cols" }, [teamTable(g.away, g.line), teamTable(g.home, g.line)])
+    ]);
+    if (g.pick) body.appendChild(summaryTable(g));
+    if (g.reason) {
+      var why = g.reason === "need 5 games for each team"
+        ? "Need 5 games for each team (" + g.away.name + " " + g.away.available + ", " + g.home.name + " " + g.home.available + ")."
+        : g.reason.charAt(0).toUpperCase() + g.reason.slice(1) + ".";
+      body.appendChild(h("p", { class: "note" }, [why]));
+    }
+    if (g.pick && g.ou_known < 10) {
+      body.appendChild(h("p", { class: "note" }, ["Games over/under counted from " + g.ou_known + " of 10 games with a saved line."]));
+    }
+    return h("details", null, [sum, body]);
+  }
+
+  function render(data, dayIdx) {
+    var list = document.getElementById("list");
+    list.textContent = "";
+    var day = data.days[dayIdx];
+    if (!day.games.length) { list.appendChild(h("div", { class: "empty" }, ["No games on this date."])); return; }
+    day.games.forEach(function (g) { list.appendChild(gameEl(g)); });
+  }
+
+  function init(data) {
+    document.getElementById("updated").textContent =
+      "Updated " + new Date(data.generated_at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+    var tabs = document.getElementById("tabs");
+    data.days.forEach(function (d, i) {
+      var label = new Date(d.date + "T12:00:00").toLocaleDateString([], { weekday: "short", month: "numeric", day: "numeric" });
+      var b = h("button", { type: "button", "aria-pressed": i === 0 ? "true" : "false" }, [label + " (" + d.games.length + ")"]);
+      b.addEventListener("click", function () {
+        Array.prototype.forEach.call(tabs.children, function (x) { x.setAttribute("aria-pressed", "false"); });
+        b.setAttribute("aria-pressed", "true");
+        render(data, i);
+      });
+      tabs.appendChild(b);
+    });
+    render(data, 0);
+  }
+
+  fetch("data/slate.json", { cache: "no-store" })
+    .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(init)
+    .catch(function () {
+      document.getElementById("list").appendChild(h("div", { class: "empty" }, ["Couldn't load data/slate.json yet."]));
+    });
+})();
+</script>
+</body>
+</html>
